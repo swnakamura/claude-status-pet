@@ -93,6 +93,15 @@ fn get_session_id(session_id: tauri::State<'_, Arc<Mutex<String>>>) -> String {
     session_id.lock().unwrap().clone()
 }
 
+/// This pet's display slot (0 for the first live pet, then the smallest free number).
+/// The frontend uses it to pick a different character per concurrent session.
+struct LaunchIndex(usize);
+
+#[tauri::command]
+fn get_launch_index(idx: tauri::State<'_, LaunchIndex>) -> usize {
+    idx.0
+}
+
 #[tauri::command]
 fn get_assets_dir(assets_dir: tauri::State<'_, Option<PathBuf>>) -> Option<String> {
     assets_dir.inner().as_ref().map(|p| p.to_string_lossy().to_string())
@@ -167,7 +176,7 @@ fn bind_session(
     if is_lock_alive(&lock_file) {
         return Err("Session already has a running pet".to_string());
     }
-    write_lock_file(&lock_file);
+    write_lock_file(&lock_file, free_slot(Some(&lock_file)));
 
     // Update shared state
     *status_path_state.lock().unwrap() = status_file.clone();
@@ -609,13 +618,39 @@ fn is_safe_session_id(id: &str) -> bool {
     !id.is_empty() && !id.contains('/') && !id.contains('\\') && !id.contains("..")
 }
 
-fn write_lock_file(lock_path: &PathBuf) {
-    let _ = fs::write(lock_path, std::process::id().to_string());
+fn write_lock_file(lock_path: &PathBuf, slot: usize) {
+    let _ = fs::write(lock_path, format!("{}\n{}", std::process::id(), slot));
+}
+
+fn lock_slot(lock_path: &PathBuf) -> usize {
+    fs::read_to_string(lock_path)
+        .ok()
+        .and_then(|c| c.lines().nth(1).and_then(|l| l.trim().parse().ok()))
+        .unwrap_or(0)
+}
+
+/// Smallest slot not taken by another live pet. Slots are stable per window (kept in the
+/// lock file), so restarting one pet does not renumber the others, and a closed pet's slot
+/// is reused by the next launch.
+fn free_slot(own_lock: Option<&PathBuf>) -> usize {
+    let Ok(entries) = fs::read_dir(default_pet_dir()) else { return 0 };
+    let taken: Vec<usize> = entries
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| {
+            let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            name.starts_with("pet-") && name.ends_with(".lock")
+        })
+        .filter(|p| Some(p) != own_lock)
+        .filter(|p| is_lock_alive(p))
+        .map(|p| lock_slot(&p))
+        .collect();
+    (0..).find(|n| !taken.contains(n)).unwrap_or(0)
 }
 
 fn is_lock_alive(lock_path: &PathBuf) -> bool {
     let Ok(content) = fs::read_to_string(lock_path) else { return false };
-    let Ok(pid) = content.trim().parse::<u32>() else { return false };
+    let Ok(pid) = content.lines().next().unwrap_or("").trim().parse::<u32>() else { return false };
     is_process_running(pid)
 }
 
@@ -843,7 +878,7 @@ pub fn run() {
     let explicit_session = args.windows(2).find(|w| w[0] == "--session-id").map(|w| w[1].clone());
 
     // Determine if we have an explicit session or need session selection
-    let (initial_status_path, initial_session_id, initial_lock) = if let Some(sf) = &explicit_status {
+    let (initial_status_path, initial_session_id, initial_lock, launch_index) = if let Some(sf) = &explicit_status {
         let sid = explicit_session.clone().unwrap_or_else(|| "unknown".to_string());
         let pet_dir = default_pet_dir();
         let _ = fs::create_dir_all(&pet_dir);
@@ -852,11 +887,12 @@ pub fn run() {
             eprintln!("Pet already running for session {}", sid);
             std::process::exit(0);
         }
-        write_lock_file(&lock_file);
-        (sf.clone(), sid, Some(lock_file))
+        let slot = free_slot(Some(&lock_file));
+        write_lock_file(&lock_file, slot);
+        (sf.clone(), sid, Some(lock_file), slot)
     } else {
         // No explicit session — will show session picker in frontend
-        (default_status_path(), String::new(), None)
+        (default_status_path(), String::new(), None, 0)
     };
 
     let needs_session_select = explicit_status.is_none() && !demo_mode;
@@ -885,7 +921,8 @@ pub fn run() {
         .manage(session_id_shared)
         .manage(lock_path_shared)
         .manage(assets_dir)
-        .invoke_handler(tauri::generate_handler![get_status, get_session_id, get_assets_dir, load_asset, load_text_asset, load_custom_asset, is_dlc_installed, download_dlc, list_available_dlcs, list_character_packs, list_unlocked_sessions, bind_session, update_assets])
+        .manage(LaunchIndex(launch_index))
+        .invoke_handler(tauri::generate_handler![get_status, get_session_id, get_launch_index, get_assets_dir, load_asset, load_text_asset, load_custom_asset, is_dlc_installed, download_dlc, list_available_dlcs, list_character_packs, list_unlocked_sessions, bind_session, update_assets])
         .setup(move |app| {
             // Do not become the active app on launch: an accessory app never takes keyboard
             // focus away from the terminal that spawned it (and shows no Dock icon).
@@ -893,6 +930,17 @@ pub fn run() {
             app.set_activation_policy(tauri::ActivationPolicy::Accessory);
 
             let window = app.get_webview_window("main").unwrap();
+
+            // Every pet starts at the same configured spot, so concurrent sessions would stack
+            // on top of each other. Shift this window up by one window height per slot.
+            let others = launch_index;
+            if others > 0 {
+                if let (Ok(pos), Ok(size)) = (window.outer_position(), window.outer_size()) {
+                    let shift = (size.height as i32) * (others as i32);
+                    let y = (pos.y - shift).max(0);
+                    let _ = window.set_position(tauri::PhysicalPosition::new(pos.x, y));
+                }
+            }
 
             // Set WebView2 background to transparent
             let _ = window.with_webview(|webview| {
