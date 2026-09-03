@@ -20,6 +20,7 @@
         "transparent": true,
         "shadow": false,
         "alwaysOnTop": true,
+        "focus": false,
         "skipTaskbar": true,
         "acceptFirstMouse": true,
         "x": 1600,

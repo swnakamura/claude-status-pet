@@ -887,6 +887,11 @@ pub fn run() {
         .manage(assets_dir)
         .invoke_handler(tauri::generate_handler![get_status, get_session_id, get_assets_dir, load_asset, load_text_asset, load_custom_asset, is_dlc_installed, download_dlc, list_available_dlcs, list_character_packs, list_unlocked_sessions, bind_session, update_assets])
         .setup(move |app| {
+            // Do not become the active app on launch: an accessory app never takes keyboard
+            // focus away from the terminal that spawned it (and shows no Dock icon).
+            #[cfg(target_os = "macos")]
+            app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+
             let window = app.get_webview_window("main").unwrap();
 
             // Set WebView2 background to transparent
