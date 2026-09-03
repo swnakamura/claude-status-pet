@@ -59,9 +59,12 @@ impl Adapter for ClaudeAdapter {
             "SubagentStart" => {
                 ("subagent".into(), "agent".into(), "Spawning sub-agent...".into())
             }
-            "SubagentStop" => {
-                ("prompt".into(), String::new(), "Sub-agent finished".into())
-            }
+            // A finished sub-agent says nothing about what the main agent does next: if it is
+            // still working, the next PreToolUse/Stop event follows at once, and Claude Code
+            // also runs helper agents *after* Stop (title/memory extraction), whose SubagentStop
+            // would otherwise overwrite the final idle state with "thinking" until the next
+            // prompt. So this event leaves the status untouched.
+            "SubagentStop" => return None,
             "Notification" => {
                 ("wait".into(), String::new(), "Waiting for approval...".into())
             }
