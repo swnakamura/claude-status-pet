@@ -18,10 +18,13 @@ impl Adapter for ClaudeAdapter {
         let tool_input = stdin.tool_input.as_ref();
         let cwd = stdin.cwd.as_deref().unwrap_or("");
         let session_id = stdin.session_id.as_deref().unwrap_or("unknown");
-        let session_name = Path::new(cwd)
+        let cwd_name = Path::new(cwd)
             .file_name()
             .and_then(|n| n.to_str())
-            .unwrap_or(session_id);
+            .unwrap_or(session_id)
+            .to_string();
+        // A session the user renamed (/rename) shows that name; otherwise the directory name.
+        let session_name = user_session_name(session_id).unwrap_or(cwd_name);
 
         let (event, tool, detail) = match hook {
             "UserPromptSubmit" => {
@@ -91,7 +94,7 @@ impl Adapter for ClaudeAdapter {
             tool,
             detail,
             session_id: session_id.to_string(),
-            session_name: session_name.to_string(),
+            session_name,
             launch_only: false,
         })
     }
@@ -104,4 +107,29 @@ fn extract_file(input: Option<&serde_json::Value>) -> Option<String> {
         .or_else(|| v.get("file"))
         .and_then(|v| v.as_str())
         .map(|s| s.to_string())
+}
+
+
+/// The name the user gave this session with /rename, read from Claude Code's session
+/// registry (~/.claude/sessions/<pid>.json, one file per running process). Auto-derived
+/// names are ignored so that the label stays the working directory unless the user chose
+/// something. Re-read on every event, so a later rename shows up at the next hook.
+fn user_session_name(session_id: &str) -> Option<String> {
+    let home = std::env::var("HOME").ok()?;
+    let entries = std::fs::read_dir(Path::new(&home).join(".claude").join("sessions")).ok()?;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("json") {
+            continue;
+        }
+        let Ok(text) = std::fs::read_to_string(&path) else { continue };
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) else { continue };
+        if v["sessionId"].as_str() != Some(session_id) || v["nameSource"].as_str() != Some("user") {
+            continue;
+        }
+        if let Some(name) = v["name"].as_str().filter(|n| !n.trim().is_empty()) {
+            return Some(name.to_string());
+        }
+    }
+    None
 }
