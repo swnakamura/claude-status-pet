@@ -215,6 +215,12 @@ html, body {
   animation: pop-in 0.4s ease-out forwards;
 }
 
+/* Character packs with "motion": false — state classes still colour the label, but the
+   sprite itself never floats, wiggles or pulses. */
+.still #ferris-wrapper, .still #ascii-art {
+  animation: none !important;
+}
+
 /* ASCII art character */
 #ascii-art {
   font-family: 'Cascadia Code', 'Consolas', 'Courier New', monospace;

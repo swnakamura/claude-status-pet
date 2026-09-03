@@ -136,6 +136,13 @@ const ASCII_SPECIES = {
 
 // GIF character maps loaded from character.json files (populated at init)
 const GIF_MODES = {};
+// Packs whose character.json sets "motion": false keep the sprite still: no float/wiggle/
+// pulse CSS animation is applied on state changes (the GIF itself may still animate).
+const PACK_STILL = {};
+function registerPack(id, cfg) {
+  GIF_MODES[id] = cfg.states;
+  PACK_STILL[id] = cfg.motion === false;
+}
 
 // Ferris SVG map loaded from character.json (populated at init, fallback to hardcoded)
 let FERRIS_SVG_MAP = {
@@ -329,8 +336,9 @@ function updateStatus(status) {
   }
 
   if (state !== currentState) {
-    container.className = 'anim-appear';
-    setTimeout(() => { container.className = `anim-${state}`; }, 400);
+    const still = PACK_STILL[mode] ? ' still' : '';
+    container.className = 'anim-appear' + still;
+    setTimeout(() => { container.className = `anim-${state}` + still; }, 400);
     currentState = state;
   }
 
@@ -810,7 +818,7 @@ async function preloadAssets() {
           try {
             const jsonStr = await window.__TAURI__.core.invoke('load_text_asset', { path: dlc.id + '/character.json' });
             if (jsonStr) {
-              GIF_MODES[dlc.id] = JSON.parse(jsonStr).states;
+              registerPack(dlc.id, JSON.parse(jsonStr));
             }
           } catch(e) {}
         }
@@ -826,7 +834,7 @@ async function preloadAssets() {
           try {
             const jsonStr = await window.__TAURI__.core.invoke('load_text_asset', { path: pack.id + '/character.json' });
             if (jsonStr) {
-              GIF_MODES[pack.id] = JSON.parse(jsonStr).states;
+              registerPack(pack.id, JSON.parse(jsonStr));
             }
           } catch(e) {}
         }
@@ -863,7 +871,7 @@ async function preloadAssets() {
       try { hasExternalAssets = !!(await window.__TAURI__.core.invoke('get_assets_dir')); } catch(e) {}
       const jsonStr = await window.__TAURI__.core.invoke('load_text_asset', { path: mode + '/character.json' });
       if (jsonStr) {
-        GIF_MODES[mode] = JSON.parse(jsonStr).states;
+        registerPack(mode, JSON.parse(jsonStr));
       } else {
         throw new Error('character.json not found after download');
       }
