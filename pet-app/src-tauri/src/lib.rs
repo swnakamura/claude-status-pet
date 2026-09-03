@@ -439,6 +439,9 @@ struct CharacterPack {
     group: String,
     installed: bool,
     config_path: String,
+    /// Optional "order" from character.json; packs are listed by (order, name), so a pack
+    /// without one sorts after every pack that has one.
+    order: Option<i64>,
 }
 
 #[tauri::command]
@@ -456,6 +459,10 @@ fn list_character_packs(assets_dir: tauri::State<'_, Option<PathBuf>>) -> Vec<Ch
         }
     }
 
+    // read_dir order is arbitrary; make the menu and the per-session rotation deterministic.
+    packs.sort_by(|a, b| {
+        a.order.unwrap_or(i64::MAX).cmp(&b.order.unwrap_or(i64::MAX)).then_with(|| a.name.cmp(&b.name))
+    });
     packs
 }
 
@@ -477,6 +484,7 @@ fn scan_packs_in_dir(dir: &PathBuf, group: &str, packs: &mut Vec<CharacterPack>)
                         group: group.to_string(),
                         installed: true,
                         config_path: config_path.to_string_lossy().to_string(),
+                        order: v["order"].as_i64(),
                     });
                 }
             } else {
@@ -495,6 +503,7 @@ fn scan_packs_in_dir(dir: &PathBuf, group: &str, packs: &mut Vec<CharacterPack>)
                         group: group.to_string(),
                         installed: true,
                         config_path: String::new(),
+                        order: None,
                     });
                 }
             }
