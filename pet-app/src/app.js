@@ -139,9 +139,21 @@ const GIF_MODES = {};
 // Packs whose character.json sets "motion": false keep the sprite still: no float/wiggle/
 // pulse CSS animation is applied on state changes (the GIF itself may still animate).
 const PACK_STILL = {};
+// Optional "scale" (0 < scale <= 1) from character.json: the sprite is drawn at that fraction
+// of the image box, for small pixel-art sprites that look blurry when stretched to fill it.
+const PACK_SCALE = {};
 function registerPack(id, cfg) {
   GIF_MODES[id] = cfg.states;
   PACK_STILL[id] = cfg.motion === false;
+  const sc = Number(cfg.scale);
+  PACK_SCALE[id] = (sc > 0 && sc <= 1) ? sc : 1;
+}
+// Shrinks the whole image box (not just the image), so the bubble above and the labels
+// below close up around the smaller sprite instead of leaving empty space.
+function applyPackScale() {
+  const px = Math.round(140 * petScale * (PACK_SCALE[mode] || 1)) + 'px';
+  imgWrapper.style.width = px;
+  imgWrapper.style.height = px;
 }
 
 // Ferris SVG map loaded from character.json (populated at init, fallback to hardcoded)
@@ -214,6 +226,7 @@ function applyConfig() {
   // Scale inner elements
   imgWrapper.style.width = Math.round(140 * petScale) + 'px';
   imgWrapper.style.height = Math.round(140 * petScale) + 'px';
+  if (typeof mode !== 'undefined') applyPackScale();
   statusText.style.fontSize = Math.round(13 * petScale) + 'px';
   sessionNameEl.style.fontSize = Math.round(12 * petScale) + 'px';
   stateLabel.style.fontSize = Math.round(12 * petScale) + 'px';
@@ -320,10 +333,12 @@ function updateStatus(status) {
 
   if (mode === 'ferris') {
     showImage();
+    applyPackScale();
     const sprites = FERRIS_SVG_MAP[state] || FERRIS_SVG_MAP.idle;
     setImage(pickRandom(sprites));
   } else if (GIF_MODES[mode]) {
     showImage();
+    applyPackScale();
     const map = GIF_MODES[mode];
     setImage(pickRandom(map[state] || map.idle));
   } else {
