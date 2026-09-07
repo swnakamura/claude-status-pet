@@ -102,6 +102,25 @@ fn get_launch_index(idx: tauri::State<'_, LaunchIndex>) -> usize {
     idx.0
 }
 
+/// Physical position the window was created at (the configured spot).
+struct BasePosition(Mutex<Option<(i32, i32)>>);
+
+/// Stack this window above the configured spot: slot × `height` (logical px, the height the
+/// frontend just sized the window to) upwards, clamped to the top of the screen. Every pet
+/// starts at the same configured position, so without this concurrent sessions overlap.
+#[tauri::command]
+fn place_window(
+    window: tauri::WebviewWindow,
+    height: f64,
+    slot: tauri::State<'_, LaunchIndex>,
+    base: tauri::State<'_, BasePosition>,
+) {
+    let Some((x, y)) = *base.0.lock().unwrap() else { return };
+    let scale = window.scale_factor().unwrap_or(1.0);
+    let shift = (height * scale * slot.0 as f64).round() as i32;
+    let _ = window.set_position(tauri::PhysicalPosition::new(x, (y - shift).max(0)));
+}
+
 #[tauri::command]
 fn get_assets_dir(assets_dir: tauri::State<'_, Option<PathBuf>>) -> Option<String> {
     assets_dir.inner().as_ref().map(|p| p.to_string_lossy().to_string())
@@ -938,7 +957,8 @@ pub fn run() {
         .manage(lock_path_shared)
         .manage(assets_dir)
         .manage(LaunchIndex(launch_index))
-        .invoke_handler(tauri::generate_handler![get_status, get_session_id, get_launch_index, get_assets_dir, load_asset, load_text_asset, load_custom_asset, is_dlc_installed, download_dlc, list_available_dlcs, list_character_packs, list_unlocked_sessions, bind_session, update_assets])
+        .manage(BasePosition(Mutex::new(None)))
+        .invoke_handler(tauri::generate_handler![get_status, get_session_id, get_launch_index, place_window, get_assets_dir, load_asset, load_text_asset, load_custom_asset, is_dlc_installed, download_dlc, list_available_dlcs, list_character_packs, list_unlocked_sessions, bind_session, update_assets])
         .setup(move |app| {
             // Do not become the active app on launch: an accessory app never takes keyboard
             // focus away from the terminal that spawned it (and shows no Dock icon).
@@ -947,15 +967,10 @@ pub fn run() {
 
             let window = app.get_webview_window("main").unwrap();
 
-            // Every pet starts at the same configured spot, so concurrent sessions would stack
-            // on top of each other. Shift this window up by one window height per slot.
-            let others = launch_index;
-            if others > 0 {
-                if let (Ok(pos), Ok(size)) = (window.outer_position(), window.outer_size()) {
-                    let shift = (size.height as i32) * (others as i32);
-                    let y = (pos.y - shift).max(0);
-                    let _ = window.set_position(tauri::PhysicalPosition::new(pos.x, y));
-                }
+            // Remember where the window was created; place_window stacks it from there once
+            // the frontend knows how tall its content is.
+            if let Ok(pos) = window.outer_position() {
+                *app.state::<BasePosition>().0.lock().unwrap() = Some((pos.x, pos.y));
             }
 
             // Set WebView2 background to transparent

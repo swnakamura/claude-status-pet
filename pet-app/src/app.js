@@ -150,8 +150,11 @@ function registerPack(id, cfg) {
 }
 // Shrinks the whole image box (not just the image), so the bubble above and the labels
 // below close up around the smaller sprite instead of leaving empty space.
+function packBox() {
+  return Math.round(140 * petScale * (PACK_SCALE[mode] || 1));
+}
 function applyPackScale() {
-  const px = Math.round(140 * petScale * (PACK_SCALE[mode] || 1)) + 'px';
+  const px = packBox() + 'px';
   imgWrapper.style.width = px;
   imgWrapper.style.height = px;
 }
@@ -220,26 +223,30 @@ function applyConfig() {
   const bubbleColor = petSessionBg && petSessionBg !== 'transparent' ? petSessionBg : '';
   bubble.style.setProperty('--bubble-color', bubbleColor);
   asciiPre.style.fontSize = petFontSize + 'px';
-  container.style.width = Math.round(200 * petScale) + 'px';
-  container.style.height = Math.round(240 * petScale) + 'px';
+  // The window is as tall as its content: the 240px layout minus whatever a pack's "scale"
+  // took off the 140px image box. Stacked pets then sit one content-height apart instead of
+  // one full layout apart.
+  const boxPx = (typeof mode !== 'undefined') ? packBox() : Math.round(140 * petScale);
+  const winW = Math.round(200 * petScale);
+  const winH = Math.round(240 * petScale) - (Math.round(140 * petScale) - boxPx);
+  container.style.width = winW + 'px';
+  container.style.height = winH + 'px';
 
   // Scale inner elements
-  imgWrapper.style.width = Math.round(140 * petScale) + 'px';
-  imgWrapper.style.height = Math.round(140 * petScale) + 'px';
-  if (typeof mode !== 'undefined') applyPackScale();
+  imgWrapper.style.width = boxPx + 'px';
+  imgWrapper.style.height = boxPx + 'px';
   statusText.style.fontSize = Math.round(13 * petScale) + 'px';
   sessionNameEl.style.fontSize = Math.round(12 * petScale) + 'px';
   stateLabel.style.fontSize = Math.round(12 * petScale) + 'px';
   bubble.style.maxWidth = Math.round(180 * petScale) + 'px';
 
-  // Resize window to match
+  // Resize window to match, then stack it by slot from the configured spot
   if (window.__TAURI__) {
-    const w = Math.round(200 * petScale);
-    const h = Math.round(240 * petScale);
     const LS = window.__TAURI__.dpi?.LogicalSize || window.__TAURI__.window?.LogicalSize;
     if (LS) {
-      window.__TAURI__.window.getCurrentWindow().setSize(new LS(w, h));
+      window.__TAURI__.window.getCurrentWindow().setSize(new LS(winW, winH));
     }
+    window.__TAURI__.core.invoke('place_window', { height: winH }).catch(() => {});
   }
 }
 
@@ -868,6 +875,8 @@ async function preloadAssets() {
       if (packs.length > 0) mode = packs[slot % packs.length];
     } catch(e) {}
   }
+  // The pack (and its "scale") is known now: size and place the window for it.
+  applyConfig();
 
   // If current mode is a DLC that's not installed, auto-download it
   const isDlcMode = availableDlcs.some(d => d.id === mode);
