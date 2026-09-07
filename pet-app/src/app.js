@@ -857,20 +857,15 @@ async function preloadAssets() {
     }
   }
 
-  // Concurrent sessions: the pet in slot N takes the N-th installed character, starting
-  // from the saved default, so every session gets a different look. Only this window's
-  // mode changes; the saved default (localStorage) is left alone.
+  // Concurrent sessions: the pet in slot N shows the N-th installed pack (in "order"), so
+  // the character of a slot never depends on which window last saved a default. Only this
+  // window's mode changes; the saved default (localStorage) is left alone and still applies
+  // when no pack is installed.
   if (window.__TAURI__) {
     try {
-      const launchIndex = await window.__TAURI__.core.invoke('get_launch_index');
-      // Rotate over the installed packs (DLC + custom); the bundled Ferris only when nothing
-      // else is installed.
+      const slot = await window.__TAURI__.core.invoke('get_launch_index');
       const packs = Object.keys(GIF_MODES);
-      const installed = packs.length > 0 ? packs : ['ferris'];
-      if (launchIndex > 0 && installed.length > 1) {
-        const start = Math.max(0, installed.indexOf(mode));
-        mode = installed[(start + launchIndex) % installed.length];
-      }
+      if (packs.length > 0) mode = packs[slot % packs.length];
     } catch(e) {}
   }
 
