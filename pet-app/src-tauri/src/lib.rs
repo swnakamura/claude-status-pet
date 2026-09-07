@@ -105,9 +105,12 @@ fn get_launch_index(idx: tauri::State<'_, LaunchIndex>) -> usize {
 /// Physical position the window was created at (the configured spot).
 struct BasePosition(Mutex<Option<(i32, i32)>>);
 
-/// Stack this window above the configured spot: slot × `height` (logical px, the height the
-/// frontend just sized the window to) upwards, clamped to the top of the screen. Every pet
-/// starts at the same configured position, so without this concurrent sessions overlap.
+/// Place this window by its slot. Slot 0 sits at the bottom of the screen at the configured
+/// x; the following slots stack upwards, `height` (logical px, what the frontend just sized
+/// the window to) apart. When a column reaches the top of the screen, the next slots start a
+/// new column beside it: first towards the nearer screen edge (so the middle of the screen,
+/// where the work usually is, stays clear), and only when that side is full, towards the
+/// other edge. Once every column is used the pattern wraps and overlaps.
 #[tauri::command]
 fn place_window(
     window: tauri::WebviewWindow,
@@ -115,10 +118,38 @@ fn place_window(
     slot: tauri::State<'_, LaunchIndex>,
     base: tauri::State<'_, BasePosition>,
 ) {
-    let Some((x, y)) = *base.0.lock().unwrap() else { return };
+    let Some((base_x, base_y)) = *base.0.lock().unwrap() else { return };
     let scale = window.scale_factor().unwrap_or(1.0);
-    let shift = (height * scale * slot.0 as f64).round() as i32;
-    let _ = window.set_position(tauri::PhysicalPosition::new(x, (y - shift).max(0)));
+    let h = (height * scale).round().max(1.0) as i32;
+    let w = window.outer_size().map(|s| s.width as i32).unwrap_or(1).max(1);
+
+    // Screen area to fill: the monitor's work area (below the menu bar), or its full size.
+    let (area_x, area_y, area_w, area_h) = match window.current_monitor() {
+        Ok(Some(m)) => {
+            let a = m.work_area();
+            (a.position.x, a.position.y, a.size.width as i32, a.size.height as i32)
+        }
+        _ => (0, 0, i32::MAX / 2, base_y + h),
+    };
+    let rows = ((area_h / h).max(1)) as usize;
+    let column = slot.0 / rows;
+    let row = (slot.0 % rows) as i32;
+
+    // Column x positions: the configured x first, then towards the nearer edge, then the rest.
+    let near_right = (base_x + w / 2) - area_x >= area_w / 2;
+    let mut right: Vec<i32> = Vec::new();
+    let mut x = base_x + w;
+    while x + w <= area_x + area_w { right.push(x); x += w; }
+    let mut left: Vec<i32> = Vec::new();
+    let mut x = base_x - w;
+    while x >= area_x { left.push(x); x -= w; }
+    let mut columns = vec![base_x];
+    if near_right { columns.extend(right); columns.extend(left); } else { columns.extend(left); columns.extend(right); }
+    let x = columns[column % columns.len()];
+
+    let bottom = area_y + area_h - h;
+    let y = (bottom - row * h).max(area_y);
+    let _ = window.set_position(tauri::PhysicalPosition::new(x, y));
 }
 
 #[tauri::command]
