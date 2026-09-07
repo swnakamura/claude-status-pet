@@ -606,6 +606,13 @@ fn cleanup_stale_status(pet_dir: &PathBuf) {
         let name = entry.file_name();
         let name_str = name.to_string_lossy();
         if name_str.starts_with("status-") && name_str.ends_with(".json") {
+            // A session that has been quiet for a day still owns its pet: deleting its status
+            // file makes that window close itself ("Session ended"). Only files without a live
+            // pet are stale.
+            let sid = &name_str["status-".len()..name_str.len() - ".json".len()];
+            if is_lock_alive(&pet_dir.join(format!("pet-{}.lock", sid))) {
+                continue;
+            }
             if let Ok(meta) = entry.metadata() {
                 if let Ok(modified) = meta.modified() {
                     if modified < cutoff {
