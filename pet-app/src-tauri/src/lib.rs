@@ -123,14 +123,18 @@ fn place_window(
     let h = (height * scale).round().max(1.0) as i32;
     let w = window.outer_size().map(|s| s.width as i32).unwrap_or(1).max(1);
 
-    // Screen area to fill: the monitor's work area (below the menu bar), or its full size.
-    let (area_x, area_y, area_w, area_h) = match window.current_monitor() {
-        Ok(Some(m)) => {
+    // Screen area to fill: the work area (below the menu bar) of the monitor the window is
+    // on, or of the primary monitor when the configured spot is off every screen (the
+    // external monitor it was set up on is unplugged). The configured x is pulled inside.
+    let monitor = window.current_monitor().ok().flatten().or_else(|| window.primary_monitor().ok().flatten());
+    let (area_x, area_y, area_w, area_h) = match monitor {
+        Some(m) => {
             let a = m.work_area();
             (a.position.x, a.position.y, a.size.width as i32, a.size.height as i32)
         }
-        _ => (0, 0, i32::MAX / 2, base_y + h),
+        None => (0, 0, i32::MAX / 2, base_y + h),
     };
+    let base_x = base_x.clamp(area_x, (area_x + area_w - w).max(area_x));
     let rows = ((area_h / h).max(1)) as usize;
     let column = slot.0 / rows;
     let row = (slot.0 % rows) as i32;
