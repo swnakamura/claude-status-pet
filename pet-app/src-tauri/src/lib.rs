@@ -102,6 +102,38 @@ fn get_launch_index(idx: tauri::State<'_, LaunchIndex>) -> usize {
     idx.0
 }
 
+/// The laptop's built-in display as a Tauri monitor, if it is active.
+#[cfg(target_os = "macos")]
+fn builtin_monitor(window: &tauri::WebviewWindow) -> Option<tauri::Monitor> {
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    struct CGRect { x: f64, y: f64, w: f64, h: f64 }
+    #[link(name = "CoreGraphics", kind = "framework")]
+    extern "C" {
+        fn CGGetActiveDisplayList(max: u32, ids: *mut u32, count: *mut u32) -> i32;
+        fn CGDisplayIsBuiltin(id: u32) -> i32;
+        fn CGDisplayBounds(id: u32) -> CGRect;
+    }
+    let mut ids = [0u32; 16];
+    let mut n = 0u32;
+    // SAFETY: plain CoreGraphics queries with a caller-owned, correctly sized buffer.
+    let bounds = unsafe {
+        if CGGetActiveDisplayList(ids.len() as u32, ids.as_mut_ptr(), &mut n) != 0 { return None; }
+        ids[..n as usize].iter().copied().find(|&id| CGDisplayIsBuiltin(id) != 0).map(|id| CGDisplayBounds(id))?
+    };
+    // CGDisplayBounds is in points; Tauri reports physical pixels, so compare in points.
+    window.available_monitors().ok()?.into_iter().find(|m| {
+        let sf = m.scale_factor();
+        let (x, y) = (m.position().x as f64 / sf, m.position().y as f64 / sf);
+        (x - bounds.x).abs() < 2.0 && (y - bounds.y).abs() < 2.0
+    })
+}
+
+#[cfg(not(target_os = "macos"))]
+fn builtin_monitor(_window: &tauri::WebviewWindow) -> Option<tauri::Monitor> {
+    None
+}
+
 /// Physical position the window was created at (the configured spot).
 struct BasePosition(Mutex<Option<(i32, i32)>>);
 
@@ -123,10 +155,13 @@ fn place_window(
     let h = (height * scale).round().max(1.0) as i32;
     let w = window.outer_size().map(|s| s.width as i32).unwrap_or(1).max(1);
 
-    // Screen area to fill: the work area (below the menu bar) of the monitor the window is
-    // on, or of the primary monitor when the configured spot is off every screen (the
-    // external monitor it was set up on is unplugged). The configured x is pulled inside.
-    let monitor = window.current_monitor().ok().flatten().or_else(|| window.primary_monitor().ok().flatten());
+    // Screen area to fill: the work area (below the menu bar) of the built-in display, so the
+    // pets stay off an external monitor where the work usually is. Without a built-in display
+    // (clamshell), the monitor the window is on, else the primary one. The configured x is
+    // pulled inside that area.
+    let monitor = builtin_monitor(&window)
+        .or_else(|| window.current_monitor().ok().flatten())
+        .or_else(|| window.primary_monitor().ok().flatten());
     let (area_x, area_y, area_w, area_h) = match monitor {
         Some(m) => {
             let a = m.work_area();
@@ -134,7 +169,19 @@ fn place_window(
         }
         None => (0, 0, i32::MAX / 2, base_y + h),
     };
-    let base_x = base_x.clamp(area_x, (area_x + area_w - w).max(area_x));
+    // With external monitors attached the built-in display is the side screen, and the pets
+    // go to its left edge (next to nothing). On a single screen a configured x inside it is
+    // kept; one that lies on some other display says nothing about where on this one to
+    // start, so the first column goes to the right edge.
+    let right_edge = (area_x + area_w - w).max(area_x);
+    let external_attached = window.available_monitors().map(|v| v.len() > 1).unwrap_or(false);
+    let base_x = if external_attached {
+        area_x
+    } else if base_x >= area_x && base_x <= right_edge {
+        base_x
+    } else {
+        right_edge
+    };
     let rows = ((area_h / h).max(1)) as usize;
     let column = slot.0 / rows;
     let row = (slot.0 % rows) as i32;
